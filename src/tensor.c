@@ -46,6 +46,7 @@ extern _tensor_t *tensor_ones( _ds_arena_t_ *a, int ndim, const int *shape )
   return t;
 }
 
+// box-muller transform for N(0,1), scaled to mean/std
 _tensor_t *tensor_random_normal( _ds_arena_t_ *a, int ndim, const int *shape, float mean, float std )
 {
   _tensor_t *t = tensor_create( a, ndim, shape, false );

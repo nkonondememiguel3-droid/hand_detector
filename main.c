@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-int main( int argc, char **argv )
+int main(void)
 {
   _ds_arena_t_ arena = { 0 };
 
