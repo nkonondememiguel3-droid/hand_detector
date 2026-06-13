@@ -9,7 +9,7 @@
 typedef struct
 {
   float *data;
-  float *gradients; // NULL if requires_gradients == flase.
+  float *gradients; // NULL if requires_gradients == false.
   int ndim;         // the dimensions.
   int shape[TENSOR_MAX_DIMS];
   int strides[TENSOR_MAX_DIMS]; // how far we move in memory to reach the next
