@@ -42,7 +42,7 @@ static _tensor_t *conv2d_forward( _layer_t *self, _ds_arena_t_ *batch_arena, _te
         }
 
   self->last_input = input;
-  self->last_input = output;
+  self->last_output = output;
 
   return output;
 }
@@ -132,7 +132,7 @@ static _tensor_t *relu_backward( _layer_t *self, _ds_arena_t_ *batch_arena, _ten
   _tensor_t *gradients_input = tensor_zeros( batch_arena, gradients_out->ndim, gradients_out->shape );
   for ( int i = 0; i < gradients_out->size; i++ ) gradients_input->data[i] = ( self->last_input->data[i] > 0.0f ) ? gradients_out->data[i] : 0.0f;
 
-  return gradients_out;
+  return gradients_input;
 }
 
 _layer_t *relu_create( _ds_arena_t_ *param_arena )
@@ -365,7 +365,7 @@ static _tensor_t *gap_forward( _layer_t *self, _ds_arena_t_ *batch_arena, _tenso
     {
       float sum = 0.0f;
       for ( int h = 0; h < H; h++ )
-        for ( int w = 0; w < W; w++ ) sum += input->data[( ( n * C + c ) * H + h ) * W + W];
+        for ( int w = 0; w < W; w++ ) sum += input->data[( ( n * C + c ) * H + h ) * W + w];
       output->data[n * C + c] = sum / (float)( H * W );
     }
 
