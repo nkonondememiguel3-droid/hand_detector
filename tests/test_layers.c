@@ -84,7 +84,7 @@ Test( layers, conv2d_1x1_identity_kernel_passes_through )
   for ( int i = 0; i < input->size; i++ ) cr_assert_float_eq( out->data[i], input->data[i], 1e-5f );
 }
 
-// Conv2D — Gradient checks
+// Conv2D -- Gradient checks
 static float sum_squares( _tensor_t *t )
 {
   float s = 0.0f;
