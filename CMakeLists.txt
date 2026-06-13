@@ -20,6 +20,7 @@ add_library(detector_lib
     src/layers.c
     src/network.c
     src/optimizer.c
+    src/dataloader.c
 )
 target_include_directories(detector_lib PUBLIC src/include/)
 target_link_libraries(detector_lib PUBLIC ds_arena m) # link the detector_library with the ds_arena allocator library.
@@ -50,4 +51,9 @@ if(CRITERION_FOUND)
     target_link_libraries(test_network detector_lib ${CRITERION_LIBRARIES} m)
     target_include_directories(test_network PRIVATE ${CRITERION_INCLUDE_DIRS})
     add_test(NAME network_tests COMMAND test_network)
+
+    add_executable(test_dataloader tests/test_dataloader.c)
+    target_link_libraries(test_dataloader detector_lib ${CRITERION_LIBRARIES} m)
+    target_include_directories(test_dataloader PRIVATE ${CRITERION_INCLUDE_DIRS})
+    add_test(NAME dataloader_tests COMMAND test_dataloader)
 endif()
