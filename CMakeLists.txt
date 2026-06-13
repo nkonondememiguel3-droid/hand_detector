@@ -18,6 +18,8 @@ add_library(detector_lib
     src/tensor.c
     src/loss.c
     src/layers.c
+    src/network.c
+    src/optimizer.c
 )
 target_include_directories(detector_lib PUBLIC src/include/)
 target_link_libraries(detector_lib PUBLIC ds_arena m) # link the detector_library with the ds_arena allocator library.
@@ -43,4 +45,9 @@ if(CRITERION_FOUND)
     target_link_libraries(test_layers detector_lib ${CRITERION_LIBRARIES} m)
     target_include_directories(test_layers PRIVATE ${CRITERION_INCLUDE_DIRS})
     add_test(NAME layers_tests COMMAND test_layers)
+
+    add_executable(test_network tests/test_network.c)
+    target_link_libraries(test_network detector_lib ${CRITERION_LIBRARIES} m)
+    target_include_directories(test_network PRIVATE ${CRITERION_INCLUDE_DIRS})
+    add_test(NAME network_tests COMMAND test_network)
 endif()
