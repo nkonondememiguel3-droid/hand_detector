@@ -26,6 +26,9 @@ add_library(detector_lib
     src/dataloader.c
     src/augmentation.c
     src/preprocess.c
+    src/bn_fold.c
+    src/checkpoint.c
+    src/inference.c
 )
 target_include_directories(detector_lib PUBLIC src/include/)
 target_link_libraries(detector_lib PUBLIC ds_arena stb_img m) # link the detector_library with the ds_arena allocator library.
@@ -71,4 +74,19 @@ if(CRITERION_FOUND)
     target_link_libraries(test_preprocess detector_lib ${CRITERION_LIBRARIES} m stb_img)
     target_include_directories(test_preprocess PRIVATE ${CRITERION_INCLUDE_DIRS})
     add_test(NAME preprocess_tests COMMAND test_preprocess)
+
+    add_executable(test_checkpoint tests/test_checkpoint.c)
+    target_link_libraries(test_checkpoint detector_lib ${CRITERION_LIBRARIES} m stb_img)
+    target_include_directories(test_checkpoint PRIVATE ${CRITERION_INCLUDE_DIRS})
+    add_test(NAME checkpoint_tests COMMAND test_checkpoint)
+
+    add_executable(test_bn_fold tests/test_bn_fold.c)
+    target_link_libraries(test_bn_fold detector_lib ${CRITERION_LIBRARIES} m stb_img)
+    target_include_directories(test_bn_fold PRIVATE ${CRITERION_INCLUDE_DIRS})
+    add_test(NAME bn_fold_tests COMMAND test_bn_fold)
+
+    add_executable(test_inference tests/test_inference.c)
+    target_link_libraries(test_inference detector_lib ${CRITERION_LIBRARIES} m stb_img)
+    target_include_directories(test_inference PRIVATE ${CRITERION_INCLUDE_DIRS})
+    add_test(NAME inference_tests COMMAND test_inference)
 endif()
