@@ -6,12 +6,15 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -O2")
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# final executable
-add_executable(${PROJECT_NAME} main.c)
-target_link_libraries(${PROJECT_NAME} PUBLIC detector_lib ds_arena)
-
 # the memory arena allocator library
 add_subdirectory(memory)
+
+# the stb image library
+add_subdirectory(externals)
+
+# final executable
+add_executable(${PROJECT_NAME} main.c)
+target_link_libraries(${PROJECT_NAME} PUBLIC detector_lib stb_img ds_arena)
 
 # Main library (tensor + loss, no main())
 add_library(detector_lib
@@ -21,9 +24,11 @@ add_library(detector_lib
     src/network.c
     src/optimizer.c
     src/dataloader.c
+    src/augmentation.c
+    src/preprocess.c
 )
 target_include_directories(detector_lib PUBLIC src/include/)
-target_link_libraries(detector_lib PUBLIC ds_arena m) # link the detector_library with the ds_arena allocator library.
+target_link_libraries(detector_lib PUBLIC ds_arena stb_img m) # link the detector_library with the ds_arena allocator library.
 
 # Find Criterion
 find_package(PkgConfig REQUIRED)
@@ -56,4 +61,14 @@ if(CRITERION_FOUND)
     target_link_libraries(test_dataloader detector_lib ${CRITERION_LIBRARIES} m)
     target_include_directories(test_dataloader PRIVATE ${CRITERION_INCLUDE_DIRS})
     add_test(NAME dataloader_tests COMMAND test_dataloader)
+
+    add_executable(test_augmentation tests/test_augmentation.c)
+    target_link_libraries(test_augmentation detector_lib ${CRITERION_LIBRARIES} m)
+    target_include_directories(test_augmentation PRIVATE ${CRITERION_INCLUDE_DIRS})
+    add_test(NAME augmentation_tests COMMAND test_augmentation)
+
+    add_executable(test_preprocess tests/test_preprocess.c)
+    target_link_libraries(test_preprocess detector_lib ${CRITERION_LIBRARIES} m stb_img)
+    target_include_directories(test_preprocess PRIVATE ${CRITERION_INCLUDE_DIRS})
+    add_test(NAME preprocess_tests COMMAND test_preprocess)
 endif()
