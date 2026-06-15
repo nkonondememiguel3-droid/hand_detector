@@ -14,7 +14,15 @@ add_subdirectory(externals)
 
 # final executable
 add_executable(${PROJECT_NAME} main.c)
-target_link_libraries(${PROJECT_NAME} PUBLIC detector_lib stb_img ds_arena)
+target_link_libraries(${PROJECT_NAME} PUBLIC detector_lib stb_img ds_arena OpenMP::OpenMP_C)
+
+# find openmp
+find_package(OpenMP REQUIRED)
+
+# find sdl3 + webcam test executable.
+find_package(SDL3 REQUIRED CONFIG)
+add_executable(webcam_test webcam_test.c)
+target_link_libraries(webcam_test PUBLIC detector_lib ds_arena stb_img m OpenMP::OpenMP_C SDL3::SDL3)
 
 # Main library (tensor + loss, no main())
 add_library(detector_lib
@@ -31,7 +39,7 @@ add_library(detector_lib
     src/inference.c
 )
 target_include_directories(detector_lib PUBLIC src/include/)
-target_link_libraries(detector_lib PUBLIC ds_arena stb_img m) # link the detector_library with the ds_arena allocator library.
+target_link_libraries(detector_lib PUBLIC ds_arena stb_img m OpenMP::OpenMP_C) # link the detector_library with the ds_arena allocator library.
 
 # Find Criterion
 find_package(PkgConfig REQUIRED)

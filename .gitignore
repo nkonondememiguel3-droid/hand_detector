@@ -2,4 +2,6 @@
 build/
 .cache/
 datasets/
+python_version/venv/
+checkpoints/
 

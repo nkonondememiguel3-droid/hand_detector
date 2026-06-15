@@ -2,6 +2,7 @@
 #include "checkpoint.h"
 #include "dataloader.h"
 #include "ds_arena.h"
+#include "inference.h"
 #include "layers.h"
 #include "loss.h"
 #include "network.h"
@@ -13,14 +14,21 @@
 #include <stdlib.h>
 #include <time.h>
 
-#define INPUT_SIZE 256
+/* #define INPUT_SIZE 256 */
+#define INPUT_SIZE 96
 #define BATCH_SIZE 16
 #define NUM_EPOCHS 30
 #define LEARNING_RATE 1e-3f
 #define BOX_LOSS_WEIGHT 5.0f
 #define GRAD_CLIP_NORM 5.0f
-#define CHECKPOINT_PATH "checkpoints/hand_detector.bin"
+#define CHECKPOINT_PATH "../checkpoints/hand_detector.bin"
 #define CHECKPOINT_EVERY_N_EPOCHS 1
+
+// just for testing if the implementation works.
+// Add this flag at the top near your other defines
+#define OVERFIT_TEST 1 // set to 0 for normal training
+#define OVERFIT_SAMPLES 16
+#define OVERFIT_EPOCHS 200
 
 // Network architecture
 static _network_t *build_network( _ds_arena_t_ *param_arena )
@@ -48,9 +56,9 @@ static _network_t *build_network( _ds_arena_t_ *param_arena )
   network_add( net, relu_create( param_arena ) );
 
   // 16x16x128 -> 8x8x128
-  network_add( net, conv2d_create( param_arena, 128, 128, 3, 2, 1 ) );
-  network_add( net, batchnorm_create( param_arena, 128 ) );
-  network_add( net, relu_create( param_arena ) );
+  /* network_add( net, conv2d_create( param_arena, 128, 128, 3, 2, 1 ) ); */
+  /* network_add( net, batchnorm_create( param_arena, 128 ) ); */
+  /* network_add( net, relu_create( param_arena ) ); */
 
   // Global average pool -> (1,128)
   network_add( net, gap_create( param_arena ) );
@@ -97,7 +105,7 @@ static float train_one_sample( _network_t *net, _ds_arena_t_ *batch_arena, _tens
   float total_loss = conf_loss.value + BOX_LOSS_WEIGHT * box_loss.value;
 
   // Combine gradients back into a (1,5) tensor matching output's shape
-  _tensor_t *grad_output = combiine_head_gradients( batch_arena, conf_loss.gradients, box_loss.gradients, BATCH_SIZE, BOX_LOSS_WEIGHT );
+  _tensor_t *grad_output = combiine_head_gradients( batch_arena, conf_loss.gradients, box_loss.gradients, 1, BOX_LOSS_WEIGHT );
 
   network_backward( net, batch_arena, grad_output );
 
@@ -126,7 +134,7 @@ static _tensor_t *prepare_sample( _ds_arena_t_ *batch_arena, _sample_t *sample )
 
   augmenttion_gaussian_noise( raw, w * h * c, 0.02f );
 
-  // ── Resize + tensor conversion ──
+  // Resize + tensor conversion
   unsigned char *resized = resize_image( batch_arena, raw, w, h, c, INPUT_SIZE, INPUT_SIZE );
   return hwc_uint8_to_chw_tensor( batch_arena, resized, INPUT_SIZE, INPUT_SIZE, c );
 }
@@ -164,8 +172,14 @@ static float run_epoch( _network_t *net, _adam_optimizer_t *opt, _ds_arena_t_ *b
       accumulated++;
       if ( accumulated >= BATCH_SIZE || i == dataset->count - 1 )
       {
-        /* tensor_clip_gradient( opt, GRAD_CLIP_NORM ); */
-        /* adam_step( opt, LEARNING_RATE ); */
+        for ( int li = 0; li < net->num_layers; li++ )
+        {
+          _layer_t *l = net->layers[li];
+          if ( l->weights ) tensor_clip_gradient( l->weights, GRAD_CLIP_NORM );
+          if ( l->bias ) tensor_clip_gradient( l->bias, GRAD_CLIP_NORM );
+          if ( l->gamma ) tensor_clip_gradient( l->gamma, GRAD_CLIP_NORM );
+          if ( l->beta ) tensor_clip_gradient( l->beta, GRAD_CLIP_NORM );
+        }
         adam_step( opt );
         network_zero_gradient( net );
         accumulated = 0;
@@ -186,50 +200,121 @@ static float run_epoch( _network_t *net, _adam_optimizer_t *opt, _ds_arena_t_ *b
 // main
 int main( int argc, char **argv )
 {
-  if ( argc < 2 )
+
+  // accept three datasets as parameters.
+  if ( argc < 4 )
   {
-    fprintf( stderr, "Usage: %s <datasets_root>\n", argv[0] );
-    fprintf( stderr, "  expects datasets_root/oxford/.../unified and datasets_root/egohands/unified\n" );
+    fprintf( stderr, "Usage: %s <egohands_root> <oxford_root> <coco_negatives_root> [checkpoint]\n", argv[0] );
     return 1;
   }
-
   srand( (unsigned int)time( NULL ) );
 
-  // Two-arena setup
   _ds_arena_t_ param_arena = ds_arena_new( 0 );
   _ds_arena_t_ batch_arena = ds_arena_new( 0 );
 
-  // Build network and optimizer
   _network_t *net = build_network( &param_arena );
   _adam_optimizer_t *opt = adam_create( &param_arena, net, LEARNING_RATE );
 
-  // Load datasets
   char oxford_path_labels[1024], egohands_path_labels[1024];
   char oxford_path_images[1024], egohands_path_images[1024];
-  snprintf( oxford_path_labels, sizeof( oxford_path_labels ), "%s/labelds", argv[1] );
-  snprintf( egohands_path_labels, sizeof( egohands_path_labels ), "%s/images", argv[1] );
-  snprintf( oxford_path_images, sizeof( oxford_path_images ), "%s/labelds", argv[1] );
+  char coco_negatives_path_images[1024], coco_negatives_path_label[1024];
+  snprintf( egohands_path_labels, sizeof( egohands_path_labels ), "%s/labels", argv[1] );
   snprintf( egohands_path_images, sizeof( egohands_path_images ), "%s/images", argv[1] );
+  snprintf( oxford_path_labels, sizeof( oxford_path_labels ), "%s/labels", argv[2] );
+  snprintf( oxford_path_images, sizeof( oxford_path_images ), "%s/images", argv[2] );
+  snprintf( coco_negatives_path_label, sizeof( coco_negatives_path_label ), "%s/labels", argv[3] );
+  snprintf( coco_negatives_path_images, sizeof( coco_negatives_path_images ), "%s/images", argv[3] );
 
   _dataset_t *oxford = dataset_load( &param_arena, oxford_path_labels, oxford_path_images );
   _dataset_t *egohands = dataset_load( &param_arena, egohands_path_labels, egohands_path_images );
+  _dataset_t *coco = dataset_load( &param_arena, coco_negatives_path_label, coco_negatives_path_images );
 
   printf( "Oxford: %d samples\n", oxford->count );
   printf( "EgoHands: %d samples\n", egohands->count );
+  printf( "Coco: %d samples\n", coco->count );
 
-  _dataset_t *dss[] = { oxford, egohands };
-  _dataset_t *combined = dataset_concat( &param_arena, dss, 2 );
+  const char *checkpoint_arg = argc >= 5 ? argv[4] : NULL;
+  /* const char *coco_arg = argc >= 5 ? argv[4] : NULL; */
+
+  _dataset_t *combined;
+  _dataset_t *dss[] = { oxford, egohands, coco };
+  combined = dataset_concat( &param_arena, dss, 2 );
+
+  /* if ( coco_arg ) */
+  /* { */
+  /*   char coco_path_labels[1024], coco_path_images[1024]; */
+  /*   snprintf( coco_path_labels, sizeof( coco_path_labels ), "%s/labels", coco_arg ); */
+  /*   snprintf( coco_path_images, sizeof( coco_path_images ), "%s/images", coco_arg ); */
+
+  /*   _dataset_t *coco_neg = dataset_load( &param_arena, coco_path_labels, coco_path_images ); */
+  /*   printf( "COCO negatives: %d samples\n", coco_neg->count ); */
+
+  /*   _dataset_t *dss[] = { oxford, egohands, coco_neg }; */
+  /*   combined = dataset_concat( &param_arena, dss, 3 ); */
+  /* } */
+  /* else */
+  /* { */
+  /*   _dataset_t *dss[] = { oxford, egohands, coco }; */
+  /*   combined = dataset_concat( &param_arena, dss, 2 ); */
+  /* } */
+
   printf( "Combined: %d samples\n", combined->count );
 
   int positives = 0, negatives = 0;
-  dataset_stats( combined , &positives, &negatives);
+  dataset_stats( combined, &positives, &negatives );
+  printf( "Positives: %d  Negatives: %d\n", positives, negatives );
 
   _dataset_t *train_set, *val_set;
-  dataset_split( &param_arena, combined, &train_set, &val_set, 0.9f );
+  dataset_split( &param_arena, combined, &train_set, &val_set, 0.1f );
   printf( "Train: %d  Val: %d\n", train_set->count, val_set->count );
 
-  // Optionally resume from checkpoint
-  if ( argc >= 3 && checkpoint_load( net, argv[2] ) ) printf( "Resumed from checkpoint: %s\n", argv[2] );
+  if ( checkpoint_arg && checkpoint_load( net, checkpoint_arg ) ) printf( "Resumed from checkpoint: %s\n", checkpoint_arg );
+
+    /* #if OVERFIT_TEST */
+#if 0
+  // Carve out a tiny fixed subset and train on it with no validation shuffle
+  _dataset_t *overfit_set = ARENA_NEW( &param_arena, _dataset_t );
+  overfit_set->samples = train_set->samples;
+  overfit_set->count = OVERFIT_SAMPLES < train_set->count ? OVERFIT_SAMPLES : train_set->count;
+
+  printf( "=== OVERFIT TEST: %d samples x %d epochs ===\n", overfit_set->count, OVERFIT_EPOCHS );
+
+  for ( int epoch = 0; epoch < OVERFIT_EPOCHS; epoch++ )
+  {
+    float loss = run_epoch( net, opt, &batch_arena, overfit_set, true );
+    if ( ( epoch + 1 ) % 10 == 0 ) printf( "  epoch %d/%d  loss=%.6f\n", epoch + 1, OVERFIT_EPOCHS, loss );
+  }
+
+  // After the overfit loop, run inference on the first few samples
+  network_set_training( net, 0 );
+  for ( int i = 0; i < 5 && i < overfit_set->count; i++ )
+  {
+    _sample_t *s = &overfit_set->samples[i];
+    _ds_arena_checkpoint_t_ cp = ds_arena_checkpoint( &batch_arena );
+
+    _tensor_t *input = load_and_preprocess( &batch_arena, s->image_path, INPUT_SIZE, INPUT_SIZE );
+    if ( !input )
+    {
+      ds_arena_reset_to( &batch_arena, cp );
+      continue;
+    }
+
+    _detection_t det = run_inference( net, &batch_arena, input, INPUT_SIZE, INPUT_SIZE, 0.5f );
+
+    printf( "sample %d: has_hand=%d  detected=%d  conf=%.3f\n", i, s->has_hand, det.detected, det.confidence );
+    if ( s->has_hand ) printf( "  gt  box: cx=%.3f cy=%.3f w=%.3f h=%.3f\n", s->cx, s->cy, s->w, s->h );
+    if ( det.detected ) printf( "  pred box: x=%.1f y=%.1f w=%.1f h=%.1f\n", det.x, det.y, det.width, det.height );
+
+    ds_arena_reset_to( &batch_arena, cp );
+  }
+  network_set_training( net, 1 );
+
+  printf( "=== overfit done — inspect loss above ===\n" );
+  checkpoint_save( net, CHECKPOINT_PATH );
+  ds_arena_destroy( &batch_arena );
+  ds_arena_destroy( &param_arena );
+  return 0;
+#endif
 
   // Training loop
   for ( int epoch = 0; epoch < NUM_EPOCHS; epoch++ )

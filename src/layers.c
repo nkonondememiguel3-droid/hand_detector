@@ -2,6 +2,7 @@
 #include "ds_arena.h"
 #include "tensor.h"
 #include <math.h>
+#include <omp.h>
 
 // convolutional 2D
 static _tensor_t *conv2d_forward( _layer_t *self, _ds_arena_t_ *batch_arena, _tensor_t *input )
@@ -17,6 +18,7 @@ static _tensor_t *conv2d_forward( _layer_t *self, _ds_arena_t_ *batch_arena, _te
   int out_shape[] = { N, C_out, H_out, W_out };
   _tensor_t *output = tensor_zeros( batch_arena, 4, out_shape );
 
+#pragma omp parallel for collapse( 2 ) schedule( static )
   for ( int n = 0; n < N; n++ )
     for ( int co = 0; co < C_out; co++ )
       for ( int oh = 0; oh < H_out; oh++ )
@@ -59,6 +61,8 @@ static _tensor_t *conv2d_backward( _layer_t *self, _ds_arena_t_ *batch_arena, _t
 
   _tensor_t *gradients_input = tensor_zeros( batch_arena, 4, input->shape );
 
+// conv2d_backward — parallelize over n, protect gradient accumulation
+#pragma omp parallel for schedule( static )
   for ( int n = 0; n < N; n++ )
     for ( int co = 0; co < C_out; co++ )
       for ( int oh = 0; oh < H_out; oh++ )
@@ -67,6 +71,7 @@ static _tensor_t *conv2d_backward( _layer_t *self, _ds_arena_t_ *batch_arena, _t
           int go_idx = ( ( n * C_out + co ) * H_out + oh ) * W_out + ow;
           float g = gradients_out->data[go_idx];
 
+#pragma omp atomic
           self->bias->gradients[co] += g;
 
           for ( int ci = 0; ci < C_in; ci++ )
@@ -80,10 +85,38 @@ static _tensor_t *conv2d_backward( _layer_t *self, _ds_arena_t_ *batch_arena, _t
                 int w_idx = ( ( co * C_in + ci ) * k + kh ) * k + kw;
                 int i_idx = ( ( n * C_in + ci ) * H + ih ) * W + iw;
 
+#pragma omp atomic
                 self->weights->gradients[w_idx] += input->data[i_idx] * g;
+#pragma omp atomic
                 gradients_input->data[i_idx] += self->weights->data[w_idx] * g;
               }
         }
+
+  /* for ( int n = 0; n < N; n++ ) */
+  /*   for ( int co = 0; co < C_out; co++ ) */
+  /*     for ( int oh = 0; oh < H_out; oh++ ) */
+  /*       for ( int ow = 0; ow < W_out; ow++ ) */
+  /*       { */
+  /*         int go_idx = ( ( n * C_out + co ) * H_out + oh ) * W_out + ow; */
+  /*         float g = gradients_out->data[go_idx]; */
+
+  /*         self->bias->gradients[co] += g; */
+
+  /*         for ( int ci = 0; ci < C_in; ci++ ) */
+  /*           for ( int kh = 0; kh < k; kh++ ) */
+  /*             for ( int kw = 0; kw < k; kw++ ) */
+  /*             { */
+  /*               int ih = oh * s - p + kh; */
+  /*               int iw = ow * s - p + kw; */
+  /*               if ( ih < 0 || ih >= H || iw < 0 || iw >= W ) continue; */
+
+  /*               int w_idx = ( ( co * C_in + ci ) * k + kh ) * k + kw; */
+  /*               int i_idx = ( ( n * C_in + ci ) * H + ih ) * W + iw; */
+
+  /*               self->weights->gradients[w_idx] += input->data[i_idx] * g; */
+  /*               gradients_input->data[i_idx] += self->weights->data[w_idx] * g; */
+  /*             } */
+  /*       } */
 
   return gradients_input;
 }
@@ -151,9 +184,35 @@ static _tensor_t *batchnorm_forward( _layer_t *self, _ds_arena_t_ *batch_arena, 
 {
   int N = input->shape[0], C = input->shape[1];
   int H = input->shape[2], W = input->shape[3];
-  int M = N * H * W;
 
   _tensor_t *output = tensor_zeros( batch_arena, 4, input->shape );
+
+  if ( !self->training )
+  {
+    // Eval mode: use running statistics, no batch stat computation
+    for ( int c = 0; c < C; c++ )
+    {
+      float mean = self->running_mean->data[c];
+      float var = self->running_var->data[c];
+      float inv_std = 1.0f / sqrtf( var + self->bn_eps );
+      float gamma_c = self->gamma->data[c];
+      float beta_c = self->beta->data[c];
+
+      for ( int n = 0; n < N; n++ )
+        for ( int h = 0; h < H; h++ )
+          for ( int w = 0; w < W; w++ )
+          {
+            int idx = ( ( n * C + c ) * H + h ) * W + w;
+            output->data[idx] = gamma_c * ( input->data[idx] - mean ) * inv_std + beta_c;
+          }
+    }
+
+    self->last_input = input; // harmless to set; backward won't be called in eval mode
+    return output;
+  }
+
+  // Training mode: existing batch-statistics path (unchanged)
+  int M = N * H * W;
   _tensor_t *normalized = tensor_zeros( batch_arena, 4, input->shape );
 
   for ( int c = 0; c < C; c++ )
@@ -199,6 +258,58 @@ static _tensor_t *batchnorm_forward( _layer_t *self, _ds_arena_t_ *batch_arena, 
 
   return output;
 }
+/* static _tensor_t *batchnorm_forward( _layer_t *self, _ds_arena_t_ *batch_arena, _tensor_t *input ) */
+/* { */
+/*   int N = input->shape[0], C = input->shape[1]; */
+/*   int H = input->shape[2], W = input->shape[3]; */
+/*   int M = N * H * W; */
+
+/*   _tensor_t *output = tensor_zeros( batch_arena, 4, input->shape ); */
+/*   _tensor_t *normalized = tensor_zeros( batch_arena, 4, input->shape ); */
+
+/*   for ( int c = 0; c < C; c++ ) */
+/*   { */
+/*     float mean = 0.0f; */
+/*     for ( int n = 0; n < N; n++ ) */
+/*       for ( int h = 0; h < H; h++ ) */
+/*         for ( int w = 0; w < W; w++ ) mean += input->data[( ( n * C + c ) * H + h ) * W + w]; */
+/*     mean /= (float)M; */
+
+/*     float var = 0.0f; */
+/*     for ( int n = 0; n < N; n++ ) */
+/*       for ( int h = 0; h < H; h++ ) */
+/*         for ( int w = 0; w < W; w++ ) */
+/*         { */
+/*           float d = input->data[( ( n * C + c ) * H + h ) * W + w] - mean; */
+/*           var += d * d; */
+/*         } */
+/*     var /= (float)M; */
+
+/*     self->batch_mean->data[c] = mean; */
+/*     self->batch_var->data[c] = var; */
+
+/*     float m = self->bn_momentum; */
+/*     self->running_mean->data[c] = ( 1 - m ) * self->running_mean->data[c] + m * mean; */
+/*     self->running_var->data[c] = ( 1 - m ) * self->running_var->data[c] + m * var; */
+
+/*     float inv_std = 1.0f / sqrtf( var + self->bn_eps ); */
+
+/*     for ( int n = 0; n < N; n++ ) */
+/*       for ( int h = 0; h < H; h++ ) */
+/*         for ( int w = 0; w < W; w++ ) */
+/*         { */
+/*           int idx = ( ( n * C + c ) * H + h ) * W + w; */
+/*           float xhat = ( input->data[idx] - mean ) * inv_std; */
+/*           normalized->data[idx] = xhat; */
+/*           output->data[idx] = self->gamma->data[c] * xhat + self->beta->data[c]; */
+/*         } */
+/*   } */
+
+/*   self->last_input = input; */
+/*   self->normalized = normalized; */
+
+/*   return output; */
+/* } */
 
 static _tensor_t *batchnorm_backward( _layer_t *self, _ds_arena_t_ *batch_arena, _tensor_t *gradients_out )
 {
